@@ -251,13 +251,24 @@ def jbs_fetch_chapter(book, chapter):
     if key in CACHE:
         return CACHE[key]
 
+    # 認証切れ・接続エラー時は再ログインして1回リトライ
     url = f'https://api.si.jbsbibleapp.com/api/v1/bible/SI/{book}/{chapter - 1}'
-    resp = JBS_SESSION.get(url, timeout=15)
-
-    if resp.status_code in (401, 403):
-        return {'error': 'not_logged_in', 'items': [], 'count': 0}
-    if resp.status_code != 200:
-        return {'error': f'HTTP {resp.status_code}', 'items': [], 'count': 0}
+    for attempt in range(2):
+        try:
+            resp = JBS_SESSION.get(url, timeout=15)
+        except Exception as e:
+            if attempt == 0:
+                _auto_login_from_env()
+                continue
+            return {'error': f'接続エラー: {e}', 'items': [], 'count': 0}
+        if resp.status_code in (401, 403):
+            if attempt == 0:
+                _auto_login_from_env()
+                continue
+            return {'error': 'not_logged_in', 'items': [], 'count': 0}
+        if resp.status_code != 200:
+            return {'error': f'HTTP {resp.status_code}', 'items': [], 'count': 0}
+        break
 
     try:
         data = resp.json()
@@ -279,6 +290,14 @@ def jbs_fetch_chapter(book, chapter):
             s = re.sub(r'</?ruby[^>]*>', '', s)
             s = strip_html(s)
             return re.sub(r'\s+', ' ', s).strip()
+
+        def clean_note_value(val):
+            """引照・注の value 属性からHTML断片やエンティティを除去"""
+            val = val.replace('&quote;', '"')
+            val = re.sub(r'<[^>]+>', '', val)
+            val = (val.replace('&amp;', '&').replace('&lt;', '<')
+                      .replace('&gt;', '>').replace('&quot;', '"').replace('&#39;', "'"))
+            return re.sub(r'\s+', ' ', val).strip()
 
         para_list = []
         for pm in re.finditer(r'<p\b([^>]*)>(.*?)</p>', html, re.DOTALL):
@@ -310,6 +329,22 @@ def jbs_fetch_chapter(book, chapter):
                     para_frags.append(('xref', ref_text, ref))
                 continue
 
+            # 引照(x)・注(f)を節番号（target属性）ごとに収集
+            # 例: <span class="x" target="1" value="創一1　コロ一17">1</span>
+            #     <span class="f" target="3-4" value="別訳「…」">a</span>
+            # ※ 節アンカーの外側（直前）に置かれることもあるため段落全体から拾う
+            notes_by_target = {}
+            for nm in re.finditer(
+                r'<span[^>]*class="[^"]*\b(x|f)\b[^"]*"[^>]*target="([^"]*)"[^>]*value="([^"]*)"[^>]*>(.*?)</span>',
+                p_inner, re.DOTALL
+            ):
+                kind, tgt = nm.group(1), nm.group(2).strip()
+                val = clean_note_value(nm.group(3))
+                marker = strip_html(nm.group(4)).strip()
+                if val:
+                    notes_by_target.setdefault(tgt, []).append(
+                        {'kind': kind, 'no': marker, 'text': val})
+
             # 節テキスト（index は合節 "3-4" の場合があるため数字のみに限定しない）
             frags = []
             for vm in re.finditer(
@@ -324,7 +359,7 @@ def jbs_fetch_chapter(book, chapter):
                 label = idx_raw.strip() if len(nums) > 1 else str(vnum)
                 text = jbs_strip(vm.group(2))
                 if text:
-                    frags.append((vnum, label, text))
+                    frags.append((vnum, label, text, notes_by_target.get(idx_raw.strip(), [])))
             if frags:
                 para_frags.append(('verse', p_cls, frags))
 
@@ -354,7 +389,7 @@ def jbs_fetch_chapter(book, chapter):
                     flush()
                 cur_lines.append({
                     'num': frags[0][0],
-                    'parts': [[label, text] for vnum, label, text in frags]
+                    'parts': [[label, text, notes] for vnum, label, text, notes in frags]
                 })
 
         flush()
@@ -384,6 +419,9 @@ def api_chapter():
         chapter = int(request.args.get('chapter', '1'))
     except ValueError:
         chapter = 1
+    # 未ログインなら環境変数から自動ログインを試みる
+    if not _state.get('jbs_logged_in'):
+        _auto_login_from_env()
     if not _state.get('jbs_logged_in'):
         return jsonify({'error': 'not_logged_in', 'items': [], 'count': 0})
     try:
@@ -391,6 +429,18 @@ def api_chapter():
     except Exception as e:
         result = {'error': str(e), 'items': [], 'count': 0}
     return jsonify(result)
+
+
+@app.route('/api/parse_ref')
+def api_parse_ref():
+    """「創一1」のような日本語聖句表記を解析して書ID・章・節を返す"""
+    q = request.args.get('q', '').strip()
+    if not q:
+        return jsonify({'ok': False})
+    ref = parse_ja_ref(q)
+    if ref:
+        return jsonify({'ok': True, **ref})
+    return jsonify({'ok': False})
 
 
 @app.route('/api/login', methods=['POST'])

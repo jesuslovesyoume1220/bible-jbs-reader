@@ -1,5 +1,5 @@
 ---
-title: 聖書協会共同訳
+title: 聖書協会共同訳リーダー
 emoji: ✝️
 colorFrom: blue
 colorTo: indigo

@@ -176,6 +176,49 @@
     font-size: 12px;
   }
 
+  /* ── 注釈付き本文（点線下線・クリックで右パネルに引照・注） ── */
+  .verse-note-link {
+    border-bottom: 1.5px dotted #8a8a8a;
+    cursor: pointer;
+  }
+  .verse-note-link:hover {
+    background: rgba(126, 184, 247, 0.15);
+  }
+
+  /* ── 引照・注パネル ── */
+  .notes-title {
+    font-weight: 700;
+    font-size: 14px;
+    margin-bottom: 12px;
+    font-family: sans-serif;
+  }
+  .note-verse-text {
+    margin-bottom: 14px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid rgba(128,128,128,0.3);
+    line-height: 1.9;
+  }
+  .note-row {
+    margin-bottom: 12px;
+    line-height: 2.0;
+    font-family: sans-serif;
+    font-size: 13.5px;
+  }
+  .note-marker {
+    font-weight: 700;
+    margin-right: 8px;
+  }
+  .note-ref {
+    color: var(--xref-color);
+    border-bottom: 1.5px dotted var(--xref-color);
+    cursor: pointer;
+    padding-bottom: 1px;
+  }
+  .note-ref:hover {
+    color: #ffcc66;
+    border-color: #ffcc66;
+  }
+
   .loading {
     color: var(--text-muted);
     font-style: italic;
@@ -396,8 +439,16 @@ const BOOK_CHAPTERS = {
   {% endfor %}
 };
 
+const BOOK_NAMES = {
+  {% for b in books %}'{{ b.id }}': '{{ b.name }}',
+  {% endfor %}
+};
+
 let currentBook = 'MAT';
 let currentChapter = 1;
+
+// 本文パネルの各節の引照・注を保持（クリック時に右パネルへ表示）
+let NOTE_STORE = [];
 
 function esc(s) {
   return String(s)
@@ -466,12 +517,14 @@ async function fetchChapter(book, chapter, targetId, fromVerse) {
     return;
   }
 
-  renderChapter(data, panel, fromVerse);
+  // 本文パネルのみ、節クリックで引照・注を表示できるようにする
+  renderChapter(data, panel, fromVerse, targetId === 'biblePanel');
 }
 
-function renderChapter(data, panel, fromVerse) {
+function renderChapter(data, panel, fromVerse, withNotes) {
   let html = `<div class="chapter-title">${esc(data.title || '')}</div>`;
   let lastShownNum = -1;
+  if (withNotes) NOTE_STORE = [];
 
   data.items.forEach(item => {
     if (item.type === 'heading') {
@@ -481,12 +534,19 @@ function renderChapter(data, panel, fromVerse) {
         let lineHtml = '';
         if (line.parts && line.parts.length > 0) {
           line.parts.forEach(part => {
-            const num = part[0], text = part[1];
+            const num = part[0], text = part[1], notes = part[2] || [];
             if (num !== lastShownNum) {
               lineHtml += `<sup class="verse-num">${num}</sup>`;
               lastShownNum = num;
             }
-            lineHtml += esc(text) + ' ';
+            // 引照・注のある節は点線下線＋クリックで右パネルに表示（元サイトと同様）
+            if (withNotes && notes.length > 0) {
+              const idx = NOTE_STORE.length;
+              NOTE_STORE.push({ label: num, text: text, notes: notes });
+              lineHtml += `<span class="verse-note-link" onclick="showNotes(${idx})">${esc(text)}</span> `;
+            } else {
+              lineHtml += esc(text) + ' ';
+            }
           });
         } else {
           if (line.num !== lastShownNum) {
@@ -529,18 +589,63 @@ async function showRef(text, book, chapter, verse) {
   const body = document.getElementById('refPanelBody');
   const titleEl = document.getElementById('refPanelTitle');
 
-  // 書名を日本語で
-  const bookNames = {
-    {% for b in books %}'{{ b.id }}': '{{ b.name }}',
-    {% endfor %}
-  };
-  const chapterLabel = `${bookNames[book] || book} ${chapter}章`;
+  const chapterLabel = `${BOOK_NAMES[book] || book} ${chapter}章`;
   titleEl.textContent = `${text}（${chapterLabel}）`;
 
   panel.classList.add('open');
   body.innerHTML = '<div class="loading">読み込み中…</div>';
 
   await fetchChapter(book, chapter, 'refPanelBody', verse);
+}
+
+// ── 引照・注パネル表示（本文の点線部分クリック） ──
+const CIRCLED = ['①','②','③','④','⑤','⑥','⑦','⑧','⑨','⑩','⑪','⑫','⑬','⑭','⑮','⑯','⑰','⑱','⑲','⑳'];
+
+function showNotes(idx) {
+  const entry = NOTE_STORE[idx];
+  if (!entry) return;
+
+  const panel = document.getElementById('refPanel');
+  const body = document.getElementById('refPanelBody');
+  const titleEl = document.getElementById('refPanelTitle');
+
+  titleEl.textContent = `${BOOK_NAMES[currentBook] || currentBook} ${currentChapter}:${entry.label}`;
+
+  // 本文（対象の節）＋ 引照・注リスト
+  let html = `<div class="note-verse-text"><sup class="verse-num">${esc(entry.label)}</sup>${esc(entry.text)}</div>`;
+  html += '<div class="notes-title">引照・注</div>';
+
+  entry.notes.forEach(n => {
+    let marker;
+    if (n.kind === 'x') {
+      const numNo = parseInt(n.no);
+      marker = (numNo >= 1 && numNo <= 20) ? CIRCLED[numNo - 1] : esc(n.no || '');
+      // 引照は全角スペース区切りの各聖句をクリック可能に
+      const refs = n.text.split(/[\s　]+/).filter(Boolean);
+      const spans = refs.map(r =>
+        `<span class="note-ref" onclick="jumpRef('${esc(r).replace(/'/g, '')}')">${esc(r)}</span>`
+      ).join('　');
+      html += `<div class="note-row"><span class="note-marker">${marker}</span>${spans}</div>`;
+    } else {
+      // 注（別訳・直訳など）はそのまま表示
+      marker = esc(n.no || 'a');
+      html += `<div class="note-row"><span class="note-marker">${marker}</span>${esc(n.text)}</div>`;
+    }
+  });
+
+  body.innerHTML = html;
+  panel.classList.add('open');
+}
+
+// 引照・注パネル内の聖句クリック → その箇所を右パネルに表示
+async function jumpRef(refText) {
+  try {
+    const res = await fetch('/api/parse_ref?q=' + encodeURIComponent(refText));
+    const d = await res.json();
+    if (d && d.ok && d.book) {
+      showRef(refText, d.book, d.chapter, d.verse || 1);
+    }
+  } catch (e) {}
 }
 
 function closeRef() {
