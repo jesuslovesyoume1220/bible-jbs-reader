@@ -8,12 +8,12 @@
   if (window.__jbsNotesInjected) return;
   window.__jbsNotesInjected = true;
 
-  // ── パネル（右カラム下の空きスペースに固定表示） ──
+  // ── パネル（検索エリアはそのまま残し、その真下の空きスペースに表示） ──
   var panel = document.createElement('div');
   panel.id = 'jbs-notes-panel';
   panel.style.cssText = [
     'position:fixed',
-    'right:100px',
+    'right:100px',      // 位置は positionPanel() が検索エリアに合わせて自動調整
     'top:46%',
     'bottom:14px',
     'width:32%',
@@ -32,6 +32,48 @@
   panel.innerHTML =
     '<div style="color:#888;font-size:13px;">本文の点線（注のある節）をクリックすると、ここに引照・注が表示されます</div>';
   document.body.appendChild(panel);
+
+  // ── 検索エリアの位置を検出して、その真下にパネルを合わせる ──
+  //    （検索マニュアル・タブ・検索ボックス・検索結果はそのまま画面に残る）
+  function positionPanel() {
+    try {
+      // 右カラムの検索入力欄を探す（画面右側・上寄りにある幅広のinput）
+      var inputs = document.querySelectorAll('input');
+      var input = null;
+      for (var i = 0; i < inputs.length; i++) {
+        var r = inputs[i].getBoundingClientRect();
+        if (r.width > 150 && r.height > 0 &&
+            r.left > window.innerWidth * 0.35 &&
+            r.top < window.innerHeight * 0.6) { input = inputs[i]; break; }
+      }
+      if (!input) return; // 見つからなければ前回位置を維持
+
+      var ir = input.getBoundingClientRect();
+      // 検索ボックスの行（🔍ボタン含む）の幅に合わせる
+      var row = input.parentElement;
+      var rr = row ? row.getBoundingClientRect() : ir;
+      if (rr.width < ir.width) rr = ir;
+
+      // 「検索結果がありません」等の行があればその下から開始
+      var topY = ir.bottom + 64;
+      var walker = document.querySelectorAll('div, p, span');
+      for (var j = 0; j < walker.length; j++) {
+        var el = walker[j];
+        if (el.children.length === 0 && el.textContent.indexOf('検索結果') !== -1) {
+          var er = el.getBoundingClientRect();
+          if (er.height > 0 && er.top > ir.top) { topY = er.bottom + 16; break; }
+        }
+      }
+
+      panel.style.left = rr.left + 'px';
+      panel.style.width = rr.width + 'px';
+      panel.style.top = topY + 'px';
+      panel.style.right = 'auto';
+    } catch (e) { /* 位置調整失敗時は前回位置のまま */ }
+  }
+  positionPanel();
+  setInterval(positionPanel, 800);          // SPAの再描画・リサイズに追随
+  window.addEventListener('resize', positionPanel);
 
   function esc(s) {
     return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
