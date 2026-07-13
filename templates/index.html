@@ -135,8 +135,17 @@
 
   .verse-para {
     margin: 4px 0;
-    line-height: 1.9;
+    line-height: 2.4;
     font-size: 16px;
+  }
+
+  /* ── ふりがな（ルビ）表示・元サイトと同じ ── */
+  ruby { ruby-position: over; }
+  ruby rt {
+    font-size: 0.5em;
+    color: var(--text-muted);
+    font-weight: normal;
+    line-height: 1;
   }
 
   sup.verse-num {
@@ -535,7 +544,8 @@ function renderChapter(data, panel, fromVerse, withNotes) {
 
   data.items.forEach(item => {
     if (item.type === 'heading') {
-      html += `<div class="section-heading">${esc(item.text)}</div>`;
+      // 見出しはふりがな付きHTML（サーバーでruby/rt/rp以外は除去済み）
+      html += `<div class="section-heading">${item.text}</div>`;
     } else if (item.type === 'para' && item.lines) {
       item.lines.forEach(line => {
         let lineHtml = '';
@@ -546,13 +556,13 @@ function renderChapter(data, panel, fromVerse, withNotes) {
               lineHtml += `<sup class="verse-num">${num}</sup>`;
               lastShownNum = num;
             }
-            // 引照・注のある節は点線下線＋クリックで右パネルに表示（元サイトと同様）
+            // 節テキストはふりがな付きHTML。引照・注のある節は点線下線＋クリックで右パネル表示
             if (withNotes && notes.length > 0) {
               const idx = NOTE_STORE.length;
               NOTE_STORE.push({ label: num, text: text, notes: notes });
-              lineHtml += `<span class="verse-note-link" onclick="showNotes(${idx})">${esc(text)}</span> `;
+              lineHtml += `<span class="verse-note-link" onclick="showNotes(${idx})">${text}</span> `;
             } else {
-              lineHtml += esc(text) + ' ';
+              lineHtml += text + ' ';
             }
           });
         } else {
@@ -560,7 +570,7 @@ function renderChapter(data, panel, fromVerse, withNotes) {
             lineHtml = `<sup class="verse-num">${line.num}</sup>`;
             lastShownNum = line.num;
           }
-          lineHtml += esc(line.text || '');
+          lineHtml += (line.text || '');
         }
         html += `<p class="verse-para">${lineHtml.trim()}</p>`;
       });
@@ -618,8 +628,8 @@ function showNotes(idx) {
 
   titleEl.textContent = `${BOOK_NAMES[currentBook] || currentBook} ${currentChapter}:${entry.label}`;
 
-  // 本文（対象の節）＋ 引照・注リスト
-  let html = `<div class="note-verse-text"><sup class="verse-num">${esc(entry.label)}</sup>${esc(entry.text)}</div>`;
+  // 本文（対象の節・ふりがな付き）＋ 引照・注リスト
+  let html = `<div class="note-verse-text"><sup class="verse-num">${esc(entry.label)}</sup>${entry.text}</div>`;
   html += '<div class="notes-title">引照・注</div>';
 
   entry.notes.forEach(n => {

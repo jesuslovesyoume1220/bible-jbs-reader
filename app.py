@@ -281,11 +281,15 @@ def jbs_fetch_chapter(book, chapter):
     if isinstance(data, dict) and 'html' in data:
         html = data['html']
 
-        def jbs_strip(inner):
+        def jbs_strip(inner, keep_ruby=False):
             s = inner
             s = re.sub(r'<span[^>]*class="[^"]*\b(?:x|f)\b[^"]*"[^>]*>.*?</span>', '', s, flags=re.DOTALL)
             s = re.sub(r'<span[^>]*class="[^"]*v-number[^"]*"[^>]*>.*?</span>', '', s, flags=re.DOTALL)
             s = re.sub(r'<svg\b[^>]*>.*?</svg>', '', s, flags=re.DOTALL)
+            if keep_ruby:
+                # ふりがな（<ruby><rt><rp>）を残し、それ以外のタグだけ除去（元サイトと同じルビ表示）
+                s = re.sub(r'<(?!/?(?:ruby|rt|rp)\b)[^>]*>', '', s)
+                return re.sub(r'[ \t]+', ' ', s).strip()
             s = re.sub(r'<rt>[^<]*</rt>', '', s)
             s = re.sub(r'</?ruby[^>]*>', '', s)
             s = strip_html(s)
@@ -309,9 +313,9 @@ def jbs_fetch_chapter(book, chapter):
         HEADING_CLASSES = {'s', 's1', 's2', 's3'}
 
         for p_start, p_cls, p_inner in para_list:
-            # 見出し
+            # 見出し（ふりがな付き）
             if p_cls in HEADING_CLASSES:
-                text = jbs_strip(p_inner)
+                text = jbs_strip(p_inner, keep_ruby=True)
                 if text:
                     para_frags.append(('heading', text, None))
                 continue
@@ -357,7 +361,7 @@ def jbs_fetch_chapter(book, chapter):
                     continue
                 vnum = int(nums[0])
                 label = idx_raw.strip() if len(nums) > 1 else str(vnum)
-                text = jbs_strip(vm.group(2))
+                text = jbs_strip(vm.group(2), keep_ruby=True)  # ふりがな付き
                 if text:
                     frags.append((vnum, label, text, notes_by_target.get(idx_raw.strip(), [])))
             if frags:
