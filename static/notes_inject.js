@@ -1,23 +1,36 @@
 // ============================================================
 // 聖書協会共同訳（si.jbsbibleapp.com）引照・注 サイドパネル
 // 元サイトの画面はそのまま。本文の点線（注のある節）をクリックすると
-// 画面遷移せず、右下に固定表示したパネルに引照・注を表示する。
+// 画面遷移せず、フローティングパネルに引照・注を表示する。
+// パネルはヘッダーをドラッグで移動、右下角をドラッグでサイズ変更でき、
+// 位置・大きさは次回も記憶する。
 // ============================================================
 (function () {
   if (window.__jbsNotesPanel) { window.__jbsNotesPanel.style.display = 'flex'; return; }
 
-  // ── パネル（右下・はっきり見える固定表示） ──
+  // ── 保存済みの位置・大きさを読み込み（無ければ右下のデフォルト） ──
+  var saved = {};
+  try { saved = JSON.parse(localStorage.getItem('jbsNotesRect') || '{}') || {}; } catch (e) {}
+  var W = saved.w || 420;
+  var H = saved.h || Math.round(window.innerHeight * 0.42);
+  var L = (saved.left != null) ? saved.left : (window.innerWidth - W - 96);
+  var T = (saved.top != null) ? saved.top : Math.round(window.innerHeight * 0.5);
+  // 画面外に出ないよう補正
+  L = Math.max(0, Math.min(L, window.innerWidth - 120));
+  T = Math.max(0, Math.min(T, window.innerHeight - 80));
+
+  // ── パネル（移動・リサイズ可能なフローティング） ──
   var panel = document.createElement('div');
   window.__jbsNotesPanel = panel;
   panel.id = 'jbs-notes-panel';
   panel.style.cssText = [
     'position:fixed',
-    'right:96px',            // 右端のアイコン列を避ける
-    'top:52%',
-    'bottom:16px',
-    'width:30%',
-    'min-width:320px',
-    'max-width:560px',
+    'left:' + L + 'px',
+    'top:' + T + 'px',
+    'width:' + W + 'px',
+    'height:' + H + 'px',
+    'min-width:240px',
+    'min-height:120px',
     'display:flex',
     'flex-direction:column',
     'background:#ffffff',
@@ -27,12 +40,13 @@
     'box-shadow:0 6px 24px rgba(0,0,0,0.18)',
     'font-family:sans-serif',
     'color:#1a1a1a',
-    'overflow:hidden'
+    'overflow:hidden',
+    'resize:both'            // 右下角をドラッグでサイズ変更
   ].join(';');
 
-  // ヘッダー（青帯・常に見える）
+  // ヘッダー（青帯・ここをドラッグで移動）
   var header = document.createElement('div');
-  header.style.cssText = 'background:#4a90d9;color:#fff;padding:8px 14px;font-size:14px;font-weight:bold;flex-shrink:0;display:flex;justify-content:space-between;align-items:center;';
+  header.style.cssText = 'background:#4a90d9;color:#fff;padding:8px 14px;font-size:14px;font-weight:bold;flex-shrink:0;display:flex;justify-content:space-between;align-items:center;cursor:move;user-select:none;';
   header.innerHTML = '<span id="jbs-notes-title">引照・注</span><span id="jbs-notes-hide" style="cursor:pointer;font-size:16px;padding:0 4px;">✕</span>';
   panel.appendChild(header);
 
@@ -40,10 +54,48 @@
   var body = document.createElement('div');
   body.id = 'jbs-notes-body';
   body.style.cssText = 'flex:1;overflow-y:auto;padding:14px 18px;font-size:14px;line-height:2.0;';
-  body.innerHTML = '<div style="color:#888;font-size:13px;line-height:1.9;">本文の点線が付いた箇所（注のある節）を<br>クリックすると、ここに引照・注が表示されます。</div>';
+  body.innerHTML = '<div style="color:#888;font-size:13px;line-height:1.9;">本文の点線が付いた箇所（注のある節）を<br>クリックすると、ここに引照・注が表示されます。<br><br><span style="font-size:11px;">■ 青い帯をドラッグで移動／右下角をドラッグでサイズ変更</span></div>';
   panel.appendChild(body);
 
   document.body.appendChild(panel);
+
+  // ── 位置・大きさを保存 ──
+  function saveRect() {
+    try {
+      localStorage.setItem('jbsNotesRect', JSON.stringify({
+        left: parseInt(panel.style.left, 10),
+        top: parseInt(panel.style.top, 10),
+        w: panel.offsetWidth,
+        h: panel.offsetHeight
+      }));
+    } catch (e) {}
+  }
+
+  // ── ヘッダーをドラッグして移動 ──
+  var drag = null;
+  header.addEventListener('mousedown', function (e) {
+    if (e.target && e.target.id === 'jbs-notes-hide') return;
+    drag = { x: e.clientX, y: e.clientY, left: parseInt(panel.style.left, 10), top: parseInt(panel.style.top, 10) };
+    e.preventDefault();
+  });
+  document.addEventListener('mousemove', function (e) {
+    if (!drag) return;
+    var nl = drag.left + (e.clientX - drag.x);
+    var nt = drag.top + (e.clientY - drag.y);
+    nl = Math.max(0, Math.min(nl, window.innerWidth - 60));
+    nt = Math.max(0, Math.min(nt, window.innerHeight - 40));
+    panel.style.left = nl + 'px';
+    panel.style.top = nt + 'px';
+  });
+  document.addEventListener('mouseup', function () {
+    if (drag) { drag = null; saveRect(); }
+  });
+
+  // ── リサイズ（右下角ドラッグ）を検知して保存 ──
+  if (window.ResizeObserver) {
+    var ro = new ResizeObserver(function () { saveRect(); });
+    ro.observe(panel);
+  }
 
   document.getElementById('jbs-notes-hide').addEventListener('click', function () {
     panel.style.display = 'none';
