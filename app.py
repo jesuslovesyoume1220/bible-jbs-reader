@@ -497,7 +497,10 @@ def _auto_login_from_env():
             print(f'[auto-login] エラー: {e}')
 
 
-_auto_login_from_env()
+# 起動時ログインは別スレッドで実行（JBS APIが遅くてもサーバー起動をブロックしない）。
+# 未ログイン時は各リクエストで遅延ログインするため、これが失敗・遅延しても支障はない。
+import threading
+threading.Thread(target=_auto_login_from_env, daemon=True).start()
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5051))
