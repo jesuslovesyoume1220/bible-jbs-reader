@@ -303,98 +303,94 @@ def jbs_fetch_chapter(book, chapter):
                       .replace('&gt;', '>').replace('&quot;', '"').replace('&#39;', "'"))
             return re.sub(r'\s+', ' ', val).strip()
 
-        para_list = []
+        HEADING_CLASSES = {'s', 's1', 's2', 's3'}
+
+        # 引照(x)・注(f)を節番号（target属性）ごとに、HTML全体から収集
+        # 例: <span class="x" target="1" value="創一1　コロ一17">1</span>
+        #     <span class="f" target="3-4" value="別訳「…」">a</span>
+        notes_by_target = {}
+        for nm in re.finditer(
+            r'<span[^>]*class="[^"]*\b(x|f)\b[^"]*"[^>]*target="([^"]*)"[^>]*value="([^"]*)"[^>]*>(.*?)</span>',
+            html, re.DOTALL
+        ):
+            kind, tgt = nm.group(1), nm.group(2).strip()
+            val = clean_note_value(nm.group(3))
+            marker = strip_html(nm.group(4)).strip()
+            if val:
+                notes_by_target.setdefault(tgt, []).append(
+                    {'kind': kind, 'no': marker, 'text': val})
+
+        # ── 文書順に全要素（見出し・参照行・段落の開閉・節）を収集 ──
+        # ※ 節アンカー <a class="v"> は <p> の外に「はみ出す」ことがあるため、
+        #    <p> 単位ではなく HTML 全体から拾う（従来は <p> 外の節を取りこぼしていた）
+        events = []  # (pos, order, kind, *data)
+
+        # 見出し・参照行・段落の開閉（<p>ブロック）
         for pm in re.finditer(r'<p\b([^>]*)>(.*?)</p>', html, re.DOTALL):
             cls_m = re.search(r'class="([^"]*)"', pm.group(1))
             cls = cls_m.group(1) if cls_m else ''
-            para_list.append((pm.start(), cls, pm.group(2)))
-
-        para_frags = []
-        HEADING_CLASSES = {'s', 's1', 's2', 's3'}
-
-        for p_start, p_cls, p_inner in para_list:
-            # 見出し（ふりがな付き）
-            if p_cls in HEADING_CLASSES:
-                text = jbs_strip(p_inner, keep_ruby=True)
+            inner = pm.group(2)
+            if cls in HEADING_CLASSES:
+                text = jbs_strip(inner, keep_ruby=True)
                 if text:
-                    para_frags.append(('heading', text, None))
-                continue
+                    events.append((pm.start(), 0, 'heading', text))
+            elif cls == 'r':
+                raw = jbs_strip(inner).strip('（）() 　')
+                events.append((pm.start(), 0, 'xref', raw))
+            else:
+                # 通常段落: 開き=段落境界、閉じ=段落終端（節は下の全体スキャンで拾う）
+                events.append((pm.start(), 0, 'popen', None))
+                events.append((pm.end(), 2, 'pclose', None))
 
-            # 参照行 <p class="r">
-            if p_cls == 'r':
-                raw = jbs_strip(p_inner).strip('（）() 　')
-                # カンマ・読点で複数参照に分割
-                refs_raw = re.split(r'[、,；;]', raw)
-                for ref_text in refs_raw:
+        # 節アンカー（<p>の内外を問わずHTML全体から）
+        for vm in re.finditer(
+            r'<a[^>]*class="[^"]*\bv\b[^"]*"[^>]*index="([^"]+)"[^>]*>(.*?)</a>',
+            html, re.DOTALL
+        ):
+            idx_raw = vm.group(1)
+            nums = re.findall(r'\d+', idx_raw)
+            if not nums:
+                continue
+            vnum = int(nums[0])
+            label = idx_raw.strip() if len(nums) > 1 else str(vnum)
+            text = jbs_strip(vm.group(2), keep_ruby=True)  # ふりがな付き
+            if text:
+                events.append((vm.start(), 1, 'verse', vnum, label, text,
+                               notes_by_target.get(idx_raw.strip(), [])))
+
+        events.sort(key=lambda e: (e[0], e[1]))
+
+        # ── items を構築（段落境界で行を区切る） ──
+        cur_parts = []
+        cur_first = [None]
+
+        def flush():
+            if cur_parts:
+                items.append({'type': 'para', 'lines': [
+                    {'num': cur_first[0], 'parts': list(cur_parts)}]})
+                cur_parts.clear()
+                cur_first[0] = None
+
+        for ev in events:
+            kind = ev[2]
+            if kind == 'heading':
+                flush()
+                items.append({'type': 'heading', 'text': ev[3]})
+            elif kind == 'xref':
+                flush()
+                for ref_text in re.split(r'[、,；;]', ev[3]):
                     ref_text = ref_text.strip().strip('（）() ')
                     if not ref_text:
                         continue
-                    ref = parse_ja_ref(ref_text)
-                    para_frags.append(('xref', ref_text, ref))
-                continue
-
-            # 引照(x)・注(f)を節番号（target属性）ごとに収集
-            # 例: <span class="x" target="1" value="創一1　コロ一17">1</span>
-            #     <span class="f" target="3-4" value="別訳「…」">a</span>
-            # ※ 節アンカーの外側（直前）に置かれることもあるため段落全体から拾う
-            notes_by_target = {}
-            for nm in re.finditer(
-                r'<span[^>]*class="[^"]*\b(x|f)\b[^"]*"[^>]*target="([^"]*)"[^>]*value="([^"]*)"[^>]*>(.*?)</span>',
-                p_inner, re.DOTALL
-            ):
-                kind, tgt = nm.group(1), nm.group(2).strip()
-                val = clean_note_value(nm.group(3))
-                marker = strip_html(nm.group(4)).strip()
-                if val:
-                    notes_by_target.setdefault(tgt, []).append(
-                        {'kind': kind, 'no': marker, 'text': val})
-
-            # 節テキスト（index は合節 "3-4" の場合があるため数字のみに限定しない）
-            frags = []
-            for vm in re.finditer(
-                r'<a[^>]*class="[^"]*\bv\b[^"]*"[^>]*index="([^"]+)"[^>]*>(.*?)</a>',
-                p_inner, re.DOTALL
-            ):
-                idx_raw = vm.group(1)
-                nums = re.findall(r'\d+', idx_raw)
-                if not nums:
-                    continue
-                vnum = int(nums[0])
-                label = idx_raw.strip() if len(nums) > 1 else str(vnum)
-                text = jbs_strip(vm.group(2), keep_ruby=True)  # ふりがな付き
-                if text:
-                    frags.append((vnum, label, text, notes_by_target.get(idx_raw.strip(), [])))
-            if frags:
-                para_frags.append(('verse', p_cls, frags))
-
-        # items を構築
-        cur_lines = []
-        PARA_BREAK_CLASSES = {'p', 'pi', 'm', 'mi', 'nb'}
-
-        def flush():
-            if cur_lines:
-                items.append({'type': 'para', 'lines': list(cur_lines)})
-                cur_lines.clear()
-
-        for frag in para_frags:
-            ftype = frag[0]
-            if ftype == 'heading':
+                    items.append({'type': 'xref', 'text': ref_text,
+                                  'ref': parse_ja_ref(ref_text)})
+            elif kind in ('popen', 'pclose'):
                 flush()
-                items.append({'type': 'heading', 'text': frag[1]})
-            elif ftype == 'xref':
-                # 参照行は para の外に出す（flush後に追加）
-                flush()
-                items.append({'type': 'xref', 'text': frag[1], 'ref': frag[2]})
-            elif ftype == 'verse':
-                p_cls = frag[1]
-                frags = frag[2]
-                first_vnum = frags[0][0]
-                if p_cls in PARA_BREAK_CLASSES and cur_lines and cur_lines[-1]['num'] != first_vnum:
-                    flush()
-                cur_lines.append({
-                    'num': frags[0][0],
-                    'parts': [[label, text, notes] for vnum, label, text, notes in frags]
-                })
+            elif kind == 'verse':
+                vnum, label, text, notes = ev[3], ev[4], ev[5], ev[6]
+                if cur_first[0] is None:
+                    cur_first[0] = vnum
+                cur_parts.append([label, text, notes])
 
         flush()
 
