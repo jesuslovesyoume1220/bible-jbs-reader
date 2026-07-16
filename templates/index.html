@@ -186,13 +186,16 @@
     font-size: 12px;
   }
 
-  /* ── 注釈付き本文（点線下線・クリックで右パネルに引照・注） ── */
+  /* ── 本文の節（クリックで右パネルに引照・注）──
+     元サイトと同じく、点線はクリックで選択した1節だけに付く（.active）。 */
   .verse-note-link {
-    border-bottom: 1.5px dotted #8a8a8a;
     cursor: pointer;
   }
   .verse-note-link:hover {
     background: rgba(126, 184, 247, 0.15);
+  }
+  .verse-note-link.active {
+    border-bottom: 1.5px dotted #8a8a8a;
   }
 
   /* ── 引照・注パネル ── */
@@ -556,11 +559,12 @@ function renderChapter(data, panel, fromVerse, withNotes) {
               lineHtml += `<sup class="verse-num">${num}</sup>`;
               lastShownNum = num;
             }
-            // 節テキストはふりがな付きHTML。引照・注のある節は点線下線＋クリックで右パネル表示
-            if (withNotes && notes.length > 0) {
+            // 節テキストはふりがな付きHTML。どの節もクリック可能にし、
+            // 元サイトと同じくクリックした節だけに点線を付ける（.active）。
+            if (withNotes) {
               const idx = NOTE_STORE.length;
               NOTE_STORE.push({ label: num, text: text, notes: notes });
-              lineHtml += `<span class="verse-note-link" onclick="showNotes(${idx})">${text}</span> `;
+              lineHtml += `<span class="verse-note-link" onclick="showNotes(${idx}, this)">${text}</span> `;
             } else {
               lineHtml += text + ' ';
             }
@@ -618,9 +622,15 @@ async function showRef(text, book, chapter, verse) {
 // ── 引照・注パネル表示（本文の点線部分クリック） ──
 const CIRCLED = ['①','②','③','④','⑤','⑥','⑦','⑧','⑨','⑩','⑪','⑫','⑬','⑭','⑮','⑯','⑰','⑱','⑲','⑳'];
 
-function showNotes(idx) {
+function showNotes(idx, el) {
   const entry = NOTE_STORE[idx];
   if (!entry) return;
+
+  // 元サイトと同じく、点線は今クリックした1節だけに移動
+  document.querySelectorAll('.verse-note-link.active').forEach(function (e) {
+    e.classList.remove('active');
+  });
+  if (el) el.classList.add('active');
 
   const panel = document.getElementById('refPanel');
   const body = document.getElementById('refPanelBody');
@@ -630,6 +640,12 @@ function showNotes(idx) {
 
   // 本文（対象の節・ふりがな付き）＋ 引照・注リスト
   let html = `<div class="note-verse-text"><sup class="verse-num">${esc(entry.label)}</sup>${entry.text}</div>`;
+  if (entry.notes.length === 0) {
+    html += '<div class="notes-title">引照・注</div><div style="color:#888;font-size:13px;">この節に引照・注はありません。</div>';
+    body.innerHTML = html;
+    panel.classList.add('open');
+    return;
+  }
   html += '<div class="notes-title">引照・注</div>';
 
   entry.notes.forEach(n => {
