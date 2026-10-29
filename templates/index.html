@@ -6,7 +6,7 @@
 <title>聖書協会共同訳</title>
 <link rel="icon" type="image/png" href="/static/icons/icon-256.png">
 <link rel="manifest" href="/static/manifest.json">
-<meta name="theme-color" content="#0f3460">
+<meta name="theme-color" content="#4fc3f7">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="聖書協会共同訳">
@@ -388,6 +388,22 @@
     height: 100%; padding: 30px; text-align: center;
     color: var(--text-muted); font-size: 14px; line-height: 1.8;
   }
+
+  /* ── 上のバーは水色 ── */
+  header {
+    background: #4fc3f7;
+    border-bottom: 1px solid #29a9e0;
+  }
+  header .header-title { color: #0d3b66; }
+  header select {
+    background: #ffffff; color: #1a1a1a; border-color: #29a9e0;
+  }
+  header .btn {
+    background: #ffffff; color: #0d6aa8; border-color: #29a9e0;
+  }
+  header .btn:hover { background: #e1f5fe; }
+  header .login-status { color: #0d3b66; }
+  header .login-status.ok { color: #1b5e20; }
 
   /* ── 本文と引照・注の欄は白地に黒文字（対照ページと揃える） ── */
   .bible-panel, .ref-panel-body {
