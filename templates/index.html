@@ -389,6 +389,23 @@
     color: var(--text-muted); font-size: 14px; line-height: 1.8;
   }
 
+  /* ── 本文と引照・注の欄は白地に黒文字（対照ページと揃える） ── */
+  .bible-panel, .ref-panel-body {
+    background: #ffffff;
+    color: #1a1a1a;
+    --text-muted: #777777;
+    --heading-color: #1a3a6e;
+    --verse-num: #999999;
+    --xref-color: #b35c00;
+    --border: #d0dce8;
+  }
+  .bible-panel .section-heading, .ref-panel-body .section-heading { color: #1a5276; }
+  .bible-panel .xref-line:hover, .ref-panel-body .xref-line:hover,
+  .ref-panel-body .note-ref:hover { color: #7a3d00; border-color: #7a3d00; }
+  .verse-note-link:hover { background: #e3f2fd; }
+  .verse-note-link.active { border-bottom-color: #555555; }
+  .bible-panel::-webkit-scrollbar-thumb, .ref-panel-body::-webkit-scrollbar-thumb { background: #c0c0c0; }
+
   /* スマホでは本文を全幅にし、注釈はオーバーレイ表示 */
   @media (max-width: 600px) {
     .bible-panel { flex: 1 1 100%; width: 100%; padding: 14px 16px; border-right: none; }
