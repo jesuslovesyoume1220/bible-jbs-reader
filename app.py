@@ -5,26 +5,88 @@
 JBS Bible App の内容を表示し、参照箇所を右パネルで開く
 """
 
-from flask import Flask, render_template, jsonify, request
+from flask import Flask, render_template, jsonify, request, session
+from datetime import timedelta
 import requests
 import re
 import json
 import os
+import secrets
 
 app = Flask(__name__)
 
 CACHE = {}
-_state = {'jbs_logged_in': False, 'jbs_email': ''}
 
-JBS_SESSION = requests.Session()
-JBS_SESSION.headers.update({
+# ── 端末ごとのログイン ───────────────────────────────────────
+# JBSのログイン状態（Cookie）はサーバーに1つだけ持たず、各端末のブラウザに
+# 署名付きCookieとして持たせる。パスワードはログイン時に1回使うだけで保存しない。
+def _secret_key():
+    """Cookie署名用の鍵。Hugging Face では Secrets の SECRET_KEY、Mac では .secret_key ファイル"""
+    key = os.environ.get('SECRET_KEY', '').strip()
+    if key:
+        return key
+    path = os.path.join(os.path.dirname(__file__), '.secret_key')
+    try:
+        with open(path, encoding='utf-8') as f:
+            key = f.read().strip()
+        if key:
+            return key
+    except OSError:
+        pass
+    key = secrets.token_hex(32)
+    try:
+        with open(path, 'w', encoding='utf-8') as f:
+            f.write(key)
+        os.chmod(path, 0o600)
+    except OSError:
+        pass  # 書き込めなければ再起動のたびにログインし直しになるだけ
+    return key
+
+
+app.secret_key = _secret_key()
+_ON_HF = bool(os.environ.get('SPACE_ID'))  # Hugging Face Spaces 上（HTTPS・iframe表示あり）
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SECURE=_ON_HF,
+    SESSION_COOKIE_SAMESITE='None' if _ON_HF else 'Lax',
+    SESSION_COOKIE_PARTITIONED=_ON_HF,
+    PERMANENT_SESSION_LIFETIME=timedelta(days=90),
+)
+
+JBS_HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
     'X-Requested-With': 'XMLHttpRequest',
     'Origin': 'https://si.jbsbibleapp.com',
     'Referer': 'https://si.jbsbibleapp.com/',
     'Accept': 'application/json, text/plain, */*',
     'Content-Type': 'application/json',
-})
+}
+
+
+def jbs_session():
+    """この端末のJBSログインCookieを載せたセッションを作る"""
+    s = requests.Session()
+    s.headers.update(JBS_HEADERS)
+    for c in session.get('jbs_cookies', []):
+        s.cookies.set(c['name'], c['value'], domain=c['domain'], path=c['path'])
+    return s
+
+
+def jbs_keep_cookies(s):
+    """JBS側でCookieが更新されていれば、この端末の保存分も更新する"""
+    cookies = [{'name': c.name, 'value': c.value, 'domain': c.domain, 'path': c.path}
+               for c in s.cookies]
+    if cookies != session.get('jbs_cookies'):
+        session['jbs_cookies'] = cookies
+
+
+def jbs_logged_in():
+    return bool(session.get('jbs_cookies'))
+
+
+def jbs_forget():
+    session.pop('jbs_cookies', None)
+    session.pop('jbs_email', None)
 
 BOOKS = [
     {'id': 'GEN', 'name': '創世記',           'chapters': 50},
@@ -218,25 +280,18 @@ def parse_ja_ref(text):
 
 # ── JBSログイン ───────────────────────────────────────────────
 def jbs_login(email, password):
-    global JBS_SESSION
-    JBS_SESSION = requests.Session()
-    JBS_SESSION.headers.update({
-        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
-        'X-Requested-With': 'XMLHttpRequest',
-        'Origin': 'https://si.jbsbibleapp.com',
-        'Referer': 'https://si.jbsbibleapp.com/',
-        'Accept': 'application/json, text/plain, */*',
-        'Content-Type': 'application/json',
-    })
-    resp = JBS_SESSION.post(
+    """JBS APIにログインし、得たCookieをこの端末に保存"""
+    s = requests.Session()
+    s.headers.update(JBS_HEADERS)
+    resp = s.post(
         'https://api.si.jbsbibleapp.com/api/v1/auth/signin',
         json={'email': email, 'password': password},
         timeout=15
     )
     if resp.status_code == 200:
-        for k in list(CACHE.keys()):
-            if k.startswith('jbs_'):
-                del CACHE[k]
+        session.permanent = True
+        session['jbs_email'] = email
+        jbs_keep_cookies(s)
         return True, {}
     try:
         msg = resp.json().get('message', resp.text[:200])
@@ -251,24 +306,19 @@ def jbs_fetch_chapter(book, chapter):
     if key in CACHE:
         return CACHE[key]
 
-    # 認証切れ・接続エラー時は再ログインして1回リトライ
     url = f'https://api.si.jbsbibleapp.com/api/v1/bible/SI/{book}/{chapter - 1}'
-    for attempt in range(2):
-        try:
-            resp = JBS_SESSION.get(url, timeout=15)
-        except Exception as e:
-            if attempt == 0:
-                _auto_login_from_env()
-                continue
-            return {'error': f'接続エラー: {e}', 'items': [], 'count': 0}
-        if resp.status_code in (401, 403):
-            if attempt == 0:
-                _auto_login_from_env()
-                continue
-            return {'error': 'not_logged_in', 'items': [], 'count': 0}
-        if resp.status_code != 200:
-            return {'error': f'HTTP {resp.status_code}', 'items': [], 'count': 0}
-        break
+    s = jbs_session()
+    try:
+        resp = s.get(url, timeout=15)
+    except Exception as e:
+        return {'error': f'接続エラー: {e}', 'items': [], 'count': 0}
+    if resp.status_code in (401, 403):
+        # ログインの期限切れ → この端末で再ログインしてもらう
+        jbs_forget()
+        return {'error': 'not_logged_in', 'items': [], 'count': 0}
+    if resp.status_code != 200:
+        return {'error': f'HTTP {resp.status_code}', 'items': [], 'count': 0}
+    jbs_keep_cookies(s)
 
     try:
         data = resp.json()
@@ -419,10 +469,7 @@ def api_chapter():
         chapter = int(request.args.get('chapter', '1'))
     except ValueError:
         chapter = 1
-    # 未ログインなら環境変数から自動ログインを試みる
-    if not _state.get('jbs_logged_in'):
-        _auto_login_from_env()
-    if not _state.get('jbs_logged_in'):
+    if not jbs_logged_in():
         return jsonify({'error': 'not_logged_in', 'items': [], 'count': 0})
     try:
         result = jbs_fetch_chapter(book, chapter)
@@ -445,58 +492,35 @@ def api_parse_ref():
 
 @app.route('/api/login', methods=['POST'])
 def api_login():
-    data = request.get_json()
+    data = request.get_json(silent=True) or {}
     email = data.get('email', '').strip()
-    password = data.get('password', '').strip()
+    password = data.get('password', '')
     if not email or not password:
         return jsonify({'ok': False, 'message': 'メールアドレスとパスワードを入力してください'})
-    ok, result = jbs_login(email, password)
+    jbs_forget()
+    try:
+        ok, result = jbs_login(email, password)
+    except Exception as e:
+        return jsonify({'ok': False, 'message': f'接続エラー: {e}'})
     if ok:
-        _state['jbs_logged_in'] = True
-        _state['jbs_email'] = email
         return jsonify({'ok': True})
-    else:
-        _state['jbs_logged_in'] = False
-        return jsonify({'ok': False, 'message': str(result)})
+    return jsonify({'ok': False, 'message': str(result)})
 
 
 @app.route('/api/logout', methods=['POST'])
 def api_logout():
-    global JBS_SESSION
-    JBS_SESSION = requests.Session()
-    _state['jbs_logged_in'] = False
-    for k in list(CACHE.keys()):
-        if k.startswith('jbs_'):
-            del CACHE[k]
+    # この端末のログインだけを消す（他の端末には影響しない）
+    jbs_forget()
     return jsonify({'ok': True})
 
 
 @app.route('/api/status')
 def api_status():
     return jsonify({
-        'logged_in': _state.get('jbs_logged_in', False),
-        'email': _state.get('jbs_email', ''),
+        'logged_in': jbs_logged_in(),
+        'email': session.get('jbs_email', '') if jbs_logged_in() else '',
     })
 
-
-def _auto_login_from_env():
-    email = os.environ.get('JBS_EMAIL', '').strip()
-    password = os.environ.get('JBS_PASSWORD', '').strip()
-    if email and password:
-        try:
-            ok, _ = jbs_login(email, password)
-            if ok:
-                _state['jbs_logged_in'] = True
-                _state['jbs_email'] = email
-                print(f'[auto-login] JBS ログイン成功: {email}')
-        except Exception as e:
-            print(f'[auto-login] エラー: {e}')
-
-
-# 起動時ログインは別スレッドで実行（JBS APIが遅くてもサーバー起動をブロックしない）。
-# 未ログイン時は各リクエストで遅延ログインするため、これが失敗・遅延しても支障はない。
-import threading
-threading.Thread(target=_auto_login_from_env, daemon=True).start()
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5051))

@@ -441,9 +441,10 @@
   <div class="modal">
     <h2>JBS アカウントでログイン</h2>
     <label>メールアドレス</label>
-    <input type="email" id="loginEmail" placeholder="example@email.com">
+    <input type="email" id="loginEmail" placeholder="example@email.com" autocomplete="username">
     <label>パスワード</label>
-    <input type="password" id="loginPassword" placeholder="パスワード">
+    <input type="password" id="loginPassword" placeholder="パスワード" autocomplete="current-password"
+           onkeydown="if(event.key==='Enter') doLogin()">
     <div class="modal-error" id="loginError"></div>
     <div class="modal-btns">
       <button class="btn" onclick="closeLogin()">キャンセル</button>
@@ -528,6 +529,7 @@ async function fetchChapter(book, chapter, targetId, fromVerse) {
   const data = await res.json();
 
   if (data.error === 'not_logged_in') {
+    updateLoginStatus(false, '');
     panel.innerHTML = '<div class="error-msg">ログインが必要です。右上の「ログイン」ボタンからログインしてください。</div>';
     return;
   }
