@@ -3,10 +3,14 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>聖書協会共同訳</title>
+<link rel="icon" type="image/png" href="/static/icons/icon-256.png">
+<link rel="manifest" href="/static/manifest.json">
+<meta name="theme-color" content="#0f3460">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="聖書協会共同訳">
-<title>聖書協会共同訳</title>
+<link rel="apple-touch-icon" href="/static/icons/icon-180.png">
 <style>
   :root {
     --bg: #1a1a2e;
@@ -136,7 +140,7 @@
   .verse-para {
     margin: 4px 0;
     line-height: 2.4;
-    font-size: 16px;
+    font-size: var(--body-fs, 16px);
   }
 
   /* ── ふりがな（ルビ）表示・元サイトと同じ ── */
@@ -401,7 +405,7 @@
 <body>
 
 <header>
-  <span class="header-title">✝ 聖書協会共同訳</span>
+  <span class="header-title"><img src="/static/icons/icon-256.png" style="height:22px;width:22px;vertical-align:middle;margin-right:6px;border-radius:4px;">聖書協会共同訳</span>
   <div class="nav-controls">
     <select id="bookSelect" onchange="onBookChange()">
       {% for b in books %}
@@ -416,6 +420,8 @@
   </div>
   <div class="login-status" id="loginStatus">未ログイン</div>
   <button class="btn small" id="loginBtn" onclick="openLogin()">ログイン</button>
+  <button class="btn small" onclick="adjustFont(-1)" title="文字を小さく">A−</button>
+  <button class="btn small" onclick="adjustFont(1)" style="font-size:14px;" title="文字を大きく">A＋</button>
 </header>
 
 <div class="main-area">
@@ -439,7 +445,7 @@
 <!-- ログインモーダル -->
 <div class="modal-overlay" id="loginModal">
   <div class="modal">
-    <h2>JBS アカウントでログイン</h2>
+    <h2>🔑 ウェブバイブルにログイン</h2>
     <label>メールアドレス</label>
     <input type="email" id="loginEmail" placeholder="example@email.com" autocomplete="username">
     <label>パスワード</label>
@@ -502,8 +508,43 @@ function onBookChange() {
 function loadChapter() {
   currentBook = document.getElementById('bookSelect').value;
   currentChapter = parseInt(document.getElementById('chapterSelect').value) || 1;
+  savePosition();
   fetchChapter(currentBook, currentChapter, 'biblePanel');
   closeRef();
+}
+
+// ── 前回の位置（次回はここから再開） ──
+function savePosition() {
+  try {
+    localStorage.setItem('jr_book', currentBook);
+    localStorage.setItem('jr_chapter', currentChapter);
+  } catch (e) {}
+}
+function loadPosition() {
+  let book = 'MAT', chapter = 1;
+  try {
+    book = localStorage.getItem('jr_book') || 'MAT';
+    chapter = parseInt(localStorage.getItem('jr_chapter') || '1');
+  } catch (e) {}
+  if (!BOOK_CHAPTERS[book]) book = 'MAT';
+  if (isNaN(chapter)) chapter = 1;
+  chapter = Math.max(1, Math.min(chapter, BOOK_CHAPTERS[book]));
+  return { book, chapter };
+}
+
+// ── 文字サイズ調整 ──
+let bodyFs = 16;
+try { bodyFs = parseInt(localStorage.getItem('jr_fs') || '16'); } catch (e) {}
+if (isNaN(bodyFs)) bodyFs = 16;
+
+function applyFont() {
+  document.documentElement.style.setProperty('--body-fs', bodyFs + 'px');
+  try { localStorage.setItem('jr_fs', bodyFs); } catch (e) {}
+}
+
+function adjustFont(dir) {
+  bodyFs = Math.max(11, Math.min(26, bodyFs + dir));
+  applyFont();
 }
 
 function prevChapter() {
@@ -530,7 +571,7 @@ async function fetchChapter(book, chapter, targetId, fromVerse) {
 
   if (data.error === 'not_logged_in') {
     updateLoginStatus(false, '');
-    panel.innerHTML = '<div class="error-msg">ログインが必要です。右上の「ログイン」ボタンからログインしてください。</div>';
+    panel.innerHTML = '<div class="error-msg">ログインが必要です。右上の「ログイン」ボタンから、ウェブバイブルのアカウントでログインしてください。</div>';
     return;
   }
   if (data.error) {
@@ -742,7 +783,12 @@ function updateLoginStatus(ok, email) {
 
 // ── 初期化 ──
 async function init() {
-  updateChapterSelect('MAT', 1);
+  applyFont();
+  const pos = loadPosition();
+  currentBook = pos.book;
+  currentChapter = pos.chapter;
+  document.getElementById('bookSelect').value = pos.book;
+  updateChapterSelect(pos.book, pos.chapter);
 
   const statusRes = await fetch('/api/status');
   const status = await statusRes.json();
