@@ -162,34 +162,6 @@
     font-weight: bold;
   }
 
-  /* 参照行（点線下線） */
-  .xref-line {
-    display: inline-block;
-    color: var(--xref-color);
-    font-size: 13px;
-    cursor: pointer;
-    border-bottom: 1.5px dotted var(--xref-color);
-    padding-bottom: 1px;
-    margin: 2px 6px 2px 0;
-    font-family: sans-serif;
-    transition: color 0.15s, border-color 0.15s;
-  }
-  .xref-line:hover {
-    color: #ffcc66;
-    border-color: #ffcc66;
-  }
-  .xref-group {
-    margin: 6px 0 10px;
-    color: var(--text-muted);
-    font-size: 12px;
-    font-family: sans-serif;
-  }
-  .xref-group-label {
-    margin-right: 4px;
-    color: var(--text-muted);
-    font-size: 12px;
-  }
-
   /* ── 本文の節（クリックで右パネルに引照・注）──
      元サイトと同じく、点線はクリックで選択した1節だけに付く（.active）。 */
   .verse-note-link {
@@ -251,7 +223,6 @@
     padding: 20px 0;
   }
 
-  /* ── 参照パネル（右側） ── */
   /* ── 参照・注パネル（常に右半分に表示・元サイトと同じレイアウト） ── */
   .ref-panel {
     flex: 1;
@@ -423,7 +394,6 @@
   /* 本文と引照・注の境目をはっきりさせる */
   .bible-panel { border-right: 3px solid #4fc3f7; }
   .bible-panel .section-heading, .ref-panel-body .section-heading { color: #1a5276; }
-  .bible-panel .xref-line:hover, .ref-panel-body .xref-line:hover,
   .ref-panel-body .note-ref:hover { color: #7a3d00; border-color: #7a3d00; }
   .verse-note-link:hover { background: #e3f2fd; }
   .verse-note-link.active { border-bottom-color: #555555; }
@@ -618,12 +588,26 @@ function nextChapter() {
 }
 
 // ── 章データ取得・描画 ──
+// パネルごとの読み込み番号（続けて章を変えたとき、遅れて届いた古い章で上書きしないため）
+const loadSeq = {};
+function nextLoadSeq(targetId) {
+  loadSeq[targetId] = (loadSeq[targetId] || 0) + 1;
+  return loadSeq[targetId];
+}
+
 async function fetchChapter(book, chapter, targetId, fromVerse) {
   const panel = document.getElementById(targetId);
+  const seq = nextLoadSeq(targetId);
   panel.innerHTML = '<div class="loading">読み込み中…</div>';
 
-  const res = await fetch(`/api/chapter?book=${book}&chapter=${chapter}`);
-  const data = await res.json();
+  let data;
+  try {
+    const res = await fetch(`/api/chapter?book=${book}&chapter=${chapter}`);
+    data = await res.json();
+  } catch (e) {
+    data = { error: '読み込めませんでした。通信状態を確かめてください' };
+  }
+  if (seq !== loadSeq[targetId]) return;  // その後に別の章を開いた
 
   if (data.error === 'not_logged_in') {
     updateLoginStatus(false, '');
@@ -651,30 +635,22 @@ function renderChapter(data, panel, fromVerse, withNotes) {
     } else if (item.type === 'para' && item.lines) {
       item.lines.forEach(line => {
         let lineHtml = '';
-        if (line.parts && line.parts.length > 0) {
-          line.parts.forEach(part => {
-            const num = part[0], text = part[1], notes = part[2] || [];
-            if (num !== lastShownNum) {
-              lineHtml += `<sup class="verse-num">${num}</sup>`;
-              lastShownNum = num;
-            }
-            // 節テキストはふりがな付きHTML。どの節もクリック可能にし、
-            // 元サイトと同じくクリックした節だけに点線を付ける（.active）。
-            if (withNotes) {
-              const idx = NOTE_STORE.length;
-              NOTE_STORE.push({ label: num, text: text, notes: notes });
-              lineHtml += `<span class="verse-note-link" onclick="showNotes(${idx}, this)">${text}</span> `;
-            } else {
-              lineHtml += text + ' ';
-            }
-          });
-        } else {
-          if (line.num !== lastShownNum) {
-            lineHtml = `<sup class="verse-num">${line.num}</sup>`;
-            lastShownNum = line.num;
+        (line.parts || []).forEach(part => {
+          const num = part[0], text = part[1], notes = part[2] || [];
+          if (num !== lastShownNum) {
+            lineHtml += `<sup class="verse-num">${num}</sup>`;
+            lastShownNum = num;
           }
-          lineHtml += (line.text || '');
-        }
+          // 節テキストはふりがな付きHTML。どの節もクリック可能にし、
+          // 元サイトと同じくクリックした節だけに点線を付ける（.active）。
+          if (withNotes) {
+            const idx = NOTE_STORE.length;
+            NOTE_STORE.push({ label: num, text: text, notes: notes });
+            lineHtml += `<span class="verse-note-link" onclick="showNotes(${idx}, this)">${text}</span> `;
+          } else {
+            lineHtml += text + ' ';
+          }
+        });
         html += `<p class="verse-para">${lineHtml.trim()}</p>`;
       });
     }
@@ -697,15 +673,9 @@ function renderChapter(data, panel, fromVerse, withNotes) {
 
 // ── 参照パネル表示 ──
 async function showRef(text, book, chapter, verse) {
-  const panel = document.getElementById('refPanel');
-  const body = document.getElementById('refPanelBody');
-  const titleEl = document.getElementById('refPanelTitle');
-
   const chapterLabel = `${BOOK_NAMES[book] || book} ${chapter}章`;
-  titleEl.textContent = `${text}（${chapterLabel}）`;
-
-  panel.classList.add('open');
-  body.innerHTML = '<div class="loading">読み込み中…</div>';
+  document.getElementById('refPanelTitle').textContent = `${text}（${chapterLabel}）`;
+  document.getElementById('refPanel').classList.add('open');
 
   await fetchChapter(book, chapter, 'refPanelBody', verse);
 }
@@ -726,6 +696,7 @@ function showNotes(idx, el) {
   const panel = document.getElementById('refPanel');
   const body = document.getElementById('refPanelBody');
   const titleEl = document.getElementById('refPanelTitle');
+  nextLoadSeq('refPanelBody');  // 読み込み中の引照の章が、あとから上書きしないように
 
   titleEl.textContent = `${BOOK_NAMES[currentBook] || currentBook} ${currentChapter}:${entry.label}`;
 
@@ -774,6 +745,7 @@ async function jumpRef(refText) {
 
 function closeRef() {
   // スマホではオーバーレイを閉じ、PCではプレースホルダーに戻す
+  nextLoadSeq('refPanelBody');
   document.getElementById('refPanel').classList.remove('open');
   document.getElementById('refPanelTitle').textContent = '引照・注';
   document.getElementById('refPanelBody').innerHTML =
@@ -839,25 +811,34 @@ function closeLogin() {
 async function doLogin() {
   const email = document.getElementById('loginEmail').value.trim();
   const password = document.getElementById('loginPassword').value;
-  document.getElementById('loginError').textContent = '';
+  const errEl = document.getElementById('loginError');
+  errEl.textContent = '';
 
-  const res = await fetch('/api/login', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({email, password})
-  });
-  const data = await res.json();
+  let data;
+  try {
+    const res = await fetch('/api/login', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({email, password})
+    });
+    data = await res.json();
+  } catch (e) {
+    errEl.textContent = 'ログインできませんでした。通信状態を確かめてください';
+    return;
+  }
   if (data.ok) {
     closeLogin();
     updateLoginStatus(true, email);
     loadChapter();
   } else {
-    document.getElementById('loginError').textContent = data.message || 'ログイン失敗';
+    errEl.textContent = data.message || 'ログインに失敗しました';
   }
 }
 async function doLogout() {
   await fetch('/api/logout', {method: 'POST'});
   updateLoginStatus(false, '');
+  nextLoadSeq('biblePanel');  // 読み込み中の章が、ログアウト後に表示されないように
+  closeRef();                 // 右側に残った節も消す
   document.getElementById('biblePanel').innerHTML = '<div class="loading">ログインして聖書を読む</div>';
 }
 

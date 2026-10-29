@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-聖書協会共同訳リーダー
-JBS Bible App の内容を表示し、参照箇所を右パネルで開く
+聖書協会共同訳（リーダー）
+JBS Bible App の内容をふりがな付きで表示し、節の引照・注を右パネルで開く
 """
 
 from flask import Flask, render_template, jsonify, request, session
 from datetime import timedelta
 import requests
 import re
-import json
 import os
 import secrets
 
@@ -158,6 +157,19 @@ BOOKS = [
 ]
 
 BOOK_MAP = {b['id']: b for b in BOOKS}
+
+
+def parse_book_chapter(args):
+    """リクエストの書・章が正しいか確かめる。正しくなければ (None, None)"""
+    book = args.get('book', 'MAT')
+    try:
+        chapter = int(args.get('chapter', '1'))
+    except ValueError:
+        return None, None
+    info = BOOK_MAP.get(book)
+    if not info or not 1 <= chapter <= info['chapters']:
+        return None, None
+    return book, chapter
 
 
 def strip_html(text):
@@ -331,19 +343,16 @@ def jbs_fetch_chapter(book, chapter):
     if isinstance(data, dict) and 'html' in data:
         html = data['html']
 
-        def jbs_strip(inner, keep_ruby=False):
+        def jbs_strip(inner):
+            """引照・注・節番号・アイコンを除き、ふりがな（ruby/rt/rp）だけ残す"""
             s = inner
             s = re.sub(r'<span[^>]*class="[^"]*\b(?:x|f)\b[^"]*"[^>]*>.*?</span>', '', s, flags=re.DOTALL)
             s = re.sub(r'<span[^>]*class="[^"]*v-number[^"]*"[^>]*>.*?</span>', '', s, flags=re.DOTALL)
             s = re.sub(r'<svg\b[^>]*>.*?</svg>', '', s, flags=re.DOTALL)
-            if keep_ruby:
-                # ふりがな（<ruby><rt><rp>）を残し、それ以外のタグだけ除去（元サイトと同じルビ表示）
-                s = re.sub(r'<(?!/?(?:ruby|rt|rp)\b)[^>]*>', '', s)
-                return re.sub(r'[ \t]+', ' ', s).strip()
-            s = re.sub(r'<rt>[^<]*</rt>', '', s)
-            s = re.sub(r'</?ruby[^>]*>', '', s)
-            s = strip_html(s)
-            return re.sub(r'\s+', ' ', s).strip()
+            # ふりがなのタグは属性を外して残し、それ以外のタグは除去（元サイトと同じルビ表示）
+            s = re.sub(r'<(/?)(ruby|rt|rp)\b[^>]*>', r'<\1\2>', s)
+            s = re.sub(r'<(?!/?(?:ruby|rt|rp)>)[^>]*>', '', s)
+            return re.sub(r'[ \t]+', ' ', s).strip()
 
         def clean_note_value(val):
             """引照・注の value 属性からHTML断片やエンティティを除去"""
@@ -370,23 +379,22 @@ def jbs_fetch_chapter(book, chapter):
                 notes_by_target.setdefault(tgt, []).append(
                     {'kind': kind, 'no': marker, 'text': val})
 
-        # ── 文書順に全要素（見出し・参照行・段落の開閉・節）を収集 ──
+        # ── 文書順に全要素（見出し・段落の開閉・節）を収集 ──
         # ※ 節アンカー <a class="v"> は <p> の外に「はみ出す」ことがあるため、
         #    <p> 単位ではなく HTML 全体から拾う（従来は <p> 外の節を取りこぼしていた）
         events = []  # (pos, order, kind, *data)
 
-        # 見出し・参照行・段落の開閉（<p>ブロック）
+        # 見出し・段落の開閉（<p>ブロック）
         for pm in re.finditer(r'<p\b([^>]*)>(.*?)</p>', html, re.DOTALL):
             cls_m = re.search(r'class="([^"]*)"', pm.group(1))
             cls = cls_m.group(1) if cls_m else ''
             inner = pm.group(2)
             if cls in HEADING_CLASSES:
-                text = jbs_strip(inner, keep_ruby=True)
+                text = jbs_strip(inner)
                 if text:
                     events.append((pm.start(), 0, 'heading', text))
             elif cls == 'r':
-                raw = jbs_strip(inner).strip('（）() 　')
-                events.append((pm.start(), 0, 'xref', raw))
+                continue  # 見出しの下の「参照：」（並行箇所）は元サイトの本文に出ないので使わない
             else:
                 # 通常段落: 開き=段落境界、閉じ=段落終端（節は下の全体スキャンで拾う）
                 events.append((pm.start(), 0, 'popen', None))
@@ -403,7 +411,7 @@ def jbs_fetch_chapter(book, chapter):
                 continue
             vnum = int(nums[0])
             label = idx_raw.strip() if len(nums) > 1 else str(vnum)
-            text = jbs_strip(vm.group(2), keep_ruby=True)  # ふりがな付き
+            text = jbs_strip(vm.group(2))  # ふりがな付き
             if text:
                 events.append((vm.start(), 1, 'verse', vnum, label, text,
                                notes_by_target.get(idx_raw.strip(), [])))
@@ -426,14 +434,6 @@ def jbs_fetch_chapter(book, chapter):
             if kind == 'heading':
                 flush()
                 items.append({'type': 'heading', 'text': ev[3]})
-            elif kind == 'xref':
-                flush()
-                for ref_text in re.split(r'[、,；;]', ev[3]):
-                    ref_text = ref_text.strip().strip('（）() ')
-                    if not ref_text:
-                        continue
-                    items.append({'type': 'xref', 'text': ref_text,
-                                  'ref': parse_ja_ref(ref_text)})
             elif kind in ('popen', 'pclose'):
                 flush()
             elif kind == 'verse':
@@ -452,7 +452,8 @@ def jbs_fetch_chapter(book, chapter):
         'items': items,
         'count': total,
     }
-    CACHE[key] = result
+    if items:  # 空の結果は覚えない（一時的な不具合を再起動まで引きずらない）
+        CACHE[key] = result
     return result
 
 
@@ -464,11 +465,9 @@ def index():
 
 @app.route('/api/chapter')
 def api_chapter():
-    book = request.args.get('book', 'MAT')
-    try:
-        chapter = int(request.args.get('chapter', '1'))
-    except ValueError:
-        chapter = 1
+    book, chapter = parse_book_chapter(request.args)
+    if not book:
+        return jsonify({'error': '書名または章が正しくありません', 'items': [], 'count': 0})
     if not jbs_logged_in():
         return jsonify({'error': 'not_logged_in', 'items': [], 'count': 0})
     try:
@@ -524,5 +523,5 @@ def api_status():
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5051))
-    print(f'聖書協会共同訳リーダーを起動します: http://localhost:{port}')
+    print(f'聖書協会共同訳を起動します: http://localhost:{port}')
     app.run(host='0.0.0.0', debug=False, port=port)
